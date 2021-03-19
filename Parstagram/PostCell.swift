@@ -2,15 +2,15 @@
 //  PostCell.swift
 //  Parstagram
 //
-//  Created by Ayon Paul on 3/18/21.
+//  Created by Ayon Paul on 3/19/21.
 //
 
 import UIKit
 
 class PostCell: UITableViewCell {
 
-    @IBOutlet weak var userLabel: UILabel!
     @IBOutlet weak var captionLabel: UILabel!
+    @IBOutlet weak var userLabel: UILabel!
     @IBOutlet weak var photoView: UIImageView!
     override func awakeFromNib() {
         super.awakeFromNib()
