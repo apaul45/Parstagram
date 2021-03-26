@@ -8,17 +8,25 @@
 import UIKit
 import Parse
 import AlamofireImage
-class FeedViewController: UIViewController, UITableViewDelegate, UITableViewDataSource{
-    
+import MessageInputBar
+class FeedViewController: UIViewController, UITableViewDelegate, UITableViewDataSource, UIApplicationDelegate, MessageInputBarDelegate{
+    let commentBar = MessageInputBar()
     var posts = [PFObject]()
+    var selectedPost: PFObject!
+    var showsCommentBar = false
     func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
-        return posts.count
+       //Have to use sections to make it easier to distinguish between posts and non nil comments-- trying to use only rows would require iterating through all ocmments to figure out how many rows/sections each post would require
+        let comment = posts[section]
+        //This gives the number of comments-- NOT including ones that are null. The ?? makes it so that nil comments will be identified as such
+        let comments = (comment["comments"] as? [PFObject]) ?? []
+        //Want to return comment.count + 2, for both the post and the add comment cell underneath the comments
+        return comments.count + 2
     }
     @IBOutlet weak var tableView: UITableView!
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
         let query = PFQuery(className: "posts")
-        query.includeKey("author")
+        query.includeKeys(["author", "comments", "comments.author"])
         query.limit = 20
         query.findObjectsInBackground {
             (posts, error) in
@@ -27,30 +35,109 @@ class FeedViewController: UIViewController, UITableViewDelegate, UITableViewData
                 self.tableView.reloadData()
             }
         }
-    
+    }
+    override var inputAccessoryView: UIView?{
+        return commentBar
+    }
+    override var canBecomeFirstResponder: Bool{
+        return showsCommentBar
+    }
+    @IBAction func onLogoutButton(_ sender: Any) {
+        PFUser.logOut()
+        
+        let main = UIStoryboard(name: "Main", bundle: nil)
+        let loginViewController = main.instantiateViewController(withIdentifier: "LoginViewController")
+        let delegate = self.view.window?.windowScene?.delegate as! SceneDelegate; delegate.window?.rootViewController = loginViewController
+        
     }
     func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
-        let cell = tableView.dequeueReusableCell(withIdentifier: "PostCell") as!
-            PostCell;
-        let post = posts[indexPath.row]
-        let user = post["author"] as! PFUser
-        cell.userLabel.text = user.username
-        cell.captionLabel.text = post["caption"] as? String
-        let imageFile = post["image"] as! PFFileObject
-        let urlString = imageFile.url!
-        let url = URL(string: urlString)!
-        cell.photoView.af.setImage(withURL: url)
-        return cell
+        let post = posts[indexPath.section]
+        let comments = (post["comments"] as? [PFObject]) ?? []
+        if indexPath.row == 0{
+            let cell = tableView.dequeueReusableCell(withIdentifier: "PostCell") as!
+                PostCell;
+            let user = post["author"] as! PFUser
+            cell.userLabel.text = user.username
+            cell.captionLabel.text = post["caption"] as? String
+            let imageFile = post["image"] as! PFFileObject
+            let urlString = imageFile.url!
+            let url = URL(string: urlString)!
+            cell.photoView.af.setImage(withURL: url)
+            return cell
+        }
+        else if indexPath.row <= comments.count{
+            let cell = tableView.dequeueReusableCell(withIdentifier: "CommentCell") as!
+                CommentCell;
+            let comment = comments[indexPath.row - 1]
+            cell.commentLabel.text = comment["text"] as? String
+            let user = comment["author"] as! PFUser
+            cell.nameLabel.text = user.username
+            return cell
+        }
+        else{
+            let cell = tableView.dequeueReusableCell(withIdentifier: "AddCommentCell")!
+            return cell
+        }
     }
     
-    
+    func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
+        //This auto-creates a new comment table in our parse server even if they aren't already defined
+        let post = posts[indexPath.section]
+        let comment = (post["comments"] as? [PFObject]) ?? []
+        //Have to identify if the cell we selected is the addcomment cell through checking if the indexpath.row is equal to the comments.count + 1-- that is, if it is the cell following the comments cell
+        if indexPath.row == comment.count + 1{
+            showsCommentBar = true
+            becomeFirstResponder()
+            commentBar.inputTextView.becomeFirstResponder()
+            selectedPost = post
+        }
+    }
+    func numberOfSections(in tableView: UITableView) -> Int {
+        return posts.count
+    }
     override func viewDidLoad() {
         super.viewDidLoad()
+        commentBar.inputTextView.placeholder = "Add a comment..."
+        commentBar.sendButton.title = "Post"
+        commentBar.delegate = self
         tableView.delegate = self
         tableView.dataSource = self
+        tableView.keyboardDismissMode = .interactive
         // Do any additional setup after loading the view.
+        let center = NotificationCenter.default
+        //This line will get the notification center, ask to observe an event (the event in which the keyboard is slidden down), and call the keyboardWillBeHidden function to then close off the keyboard in the event that a user clicks off the keyboard when going to add a commment to a post
+        center.addObserver(self, selector: #selector(keyboardWillBeHidden(note:)), name: UIResponder.keyboardWillHideNotification, object: nil)
     }
-    
+    func messageInputBar(_ inputBar: MessageInputBar, didPressSendButtonWith text: String) {
+        //Create the comment -- add it to the server
+                //The keys in comment below are user-defined- that is, the names themselves aren't special-- all of these become columns in our comments table
+                let comment = PFObject(className: "Comments")
+                comment["text"] = text
+                comment["post"] = selectedPost
+                comment["author"] = PFUser.current()!
+                //This adds the comment with the given key as comments: creates a comments array in our posts table
+                selectedPost.add(comment, forKey: "comments")
+                selectedPost.saveInBackground{ (success, error) in
+                    if success{
+                        print("Comment saved")
+                    }
+                    else{
+                        print("Something went wrong when trying to save the comment, try again")
+                    }
+                }
+        tableView.reloadData()
+        //Dismiss the keyboard input-- same method as keyboardWillbeHidden
+                    self.commentBar.inputTextView.text = nil
+                    self.showsCommentBar = false
+                    self.becomeFirstResponder()
+                    self.commentBar.inputTextView.resignFirstResponder()
+    }
+    //Does the opposite of pulling up the keyboard when add comment is clicked on
+    @objc func keyboardWillBeHidden(note: Notification){
+        commentBar.inputTextView.text = nil
+        showsCommentBar = false
+        becomeFirstResponder()
+    }
 
     /*
     // MARK: - Navigation
